@@ -32,6 +32,7 @@ class LinearProbeArgs:
     log_every: int = 100
 
     opt: OptimizerArgs = OptimizerArgs()
+    zero_features: bool | None = False # use zero features (for getting baseline)
 
 class LinearProbe(nn.Module):
     d_in: int
@@ -50,7 +51,7 @@ def main(lp_args: LinearProbeArgs):
     # ----- COPIED FROM MAIN.PY -----
     if isinstance(args.data.dt, int):
         args.data.dt = [args.data.dt]
-    print(args)
+    print(lp_args)
     dts = jnp.array(args.data.dt)
     dt_max = dts.max().item()
 
@@ -93,6 +94,8 @@ def main(lp_args: LinearProbeArgs):
         
     def loss_fn(lp_params, batch):
         features = get_features(params, batch)
+        if lp_args.zero_features:
+            features = jnp.zeros_like(features)
         y = get_target(batch)
         y_pred = jax.vmap(linear_probe.apply, in_axes=(None, 0))(lp_params, features)
         loss_mse = (y - y_pred)**2
