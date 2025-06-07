@@ -29,6 +29,8 @@ class LinearProbeArgs:
     save_dir: str | None = None
 
     n_iters: int = 1000
+    log_every: int = 100
+
     opt: OptimizerArgs = OptimizerArgs()
 
 class LinearProbe(nn.Module):
@@ -128,7 +130,7 @@ def main(lp_args: LinearProbeArgs):
         loss_history.append(metrics['loss'].item())
         if lp_args.save_dir is not None and (i_iter % lp_args.log_every == 0 or i_iter == lp_args.n_iters - 1):
             os.makedirs(lp_args.save_dir, exist_ok=True)
-            util.save_pkl(lp_args.save_dir, "params", jax.tree.map(lambda x: np.array(x), train_state.params))
+            util.save_pkl(lp_args.save_dir, "lp_params", jax.tree.map(lambda x: np.array(x), train_state.params))
             util.save_pkl(lp_args.save_dir, "lp_args", lp_args)
             util.save_pkl(lp_args.save_dir, "loss_history", loss_history)
         pbar.set_postfix(loss=loss_history[-1])
