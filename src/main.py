@@ -20,47 +20,58 @@ import util
 
 @dataclass
 class ModelArgs:
-    layers: int = 4
-    channels: int = 16
+    layers: int = 8
+    channels: int = 64
     out_channels: int = 2
+    n_dts: int = 1
 
 @dataclass
-class Args:
-    seed: int = 0
-    save_dir: str | None = None
-    model: ModelArgs = ModelArgs()
-
+class OptimizerArgs:
     batch_size: int = 32
-    n_iters: int = 1000
-    log_every: int = 100
     learning_rate: float = 3e-4
     weight_decay: float = 1e-5
     clip_grad_norm: float = 1.0
 
+@dataclass
+class DataArgs:
     gol_params: int = 6152
     grid_size: int = 64
     t_start: int = 32
     t_end: int = 64
     dt: int | List[int] = 1
 
+@dataclass
+class Args:
+    seed: int = 0
+    save_dir: str | None = None
+    n_iters: int = 1000
+    log_every: int = 100
+
+    model: ModelArgs = ModelArgs()
+    opt: OptimizerArgs = OptimizerArgs()
+    data: DataArgs = DataArgs()
+
+def create_net(args: Args):
+    return ConvNet(layers=args.model.layers, channels=args.model.channels, out_channels=args.model.out_channels, n_dts=args.model.n_dts)
 
 def main(args: Args):
-    if isinstance(args.dt, int):
-        args.dt = [args.dt]
+    if isinstance(args.data.dt, int):
+        args.data.dt = [args.data.dt]
     print(args)
-    dts = jnp.array(args.dt)
+    dts = jnp.array(args.data.dt)
     dt_max = dts.max().item()
 
-    net = ConvNet(layers=args.model.layers, channels=args.model.channels, out_channels=args.model.out_channels)
-    substrate = GameOfLife(grid_size=args.grid_size)
-    rollout_fn = partial(rollout_simulation, s0=None, substrate=substrate, fm=None, rollout_steps=args.t_end+dt_max,
+    net = create_net(args)
+    substrate = GameOfLife(grid_size=args.data.grid_size)
+    rollout_fn = partial(rollout_simulation, s0=None, substrate=substrate, fm=None, rollout_steps=args.data.t_end+dt_max,
                          time_sampling='video', img_size=None, return_state=True)
+    
     def generate_batch(rng):
         rng, _rng = split(rng)
-        state = rollout_fn(_rng, args.gol_params)['state']
+        state = rollout_fn(_rng, args.data.gol_params)['state']
 
         rng, _rng = split(rng)
-        t0 = jax.random.randint(_rng, shape=(), minval=args.t_start, maxval=args.t_end)
+        t0 = jax.random.randint(_rng, shape=(), minval=args.data.t_start, maxval=args.data.t_end)
 
         rng, _rng = split(rng)
         dt_id = jax.random.randint(_rng, shape=(), minval=0, maxval=len(dts))
@@ -92,14 +103,14 @@ def main(args: Args):
     print(f"Number of parameters: {n_params:,}")
     generate_batch_vmap = jax.jit(jax.vmap(generate_batch))
 
-    tx = optax.chain(optax.clip_by_global_norm(args.clip_grad_norm), optax.adamw(args.learning_rate, weight_decay=args.weight_decay, eps=1e-8))
+    tx = optax.chain(optax.clip_by_global_norm(args.opt.clip_grad_norm), optax.adamw(args.opt.learning_rate, weight_decay=args.opt.weight_decay, eps=1e-8))
     train_state = TrainState.create(apply_fn=net.apply, params=params, tx=tx)
 
     loss_history = []
     pbar = tqdm(range(args.n_iters))
     for i_iter in pbar:
         rng, _rng = split(rng)
-        batch = generate_batch_vmap(split(_rng, args.batch_size))
+        batch = generate_batch_vmap(split(_rng, args.opt.batch_size))
 
         train_state, metrics = iter_train(train_state, batch)
         loss_history.append(metrics['loss'].item())
