@@ -1,6 +1,6 @@
 import os
 from functools import partial
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List
 from tqdm import tqdm
 import tyro
@@ -47,9 +47,9 @@ class Args:
     n_iters: int = 1000
     log_every: int = 100
 
-    model: ModelArgs = ModelArgs()
-    opt: OptimizerArgs = OptimizerArgs()
-    data: DataArgs = DataArgs()
+    model: ModelArgs = field(default_factory=ModelArgs)
+    opt: OptimizerArgs = field(default_factory=OptimizerArgs)
+    data: DataArgs = field(default_factory=DataArgs)
 
 def create_net(args: Args):
     return ConvNet(layers=args.model.layers, channels=args.model.channels, out_channels=args.model.out_channels, n_dts=args.model.n_dts)

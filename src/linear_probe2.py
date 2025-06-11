@@ -1,6 +1,6 @@
 import os
 from functools import partial
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List
 from tqdm import tqdm
 import tyro
@@ -13,6 +13,7 @@ import optax
 from flax.training.train_state import TrainState
 import flax.linen as nn
 from sklearn.linear_model import LinearRegression
+from sklearn.model_selection import train_test_split
 
 from substrates.gol import GameOfLife
 from rollout import rollout_simulation
@@ -31,8 +32,9 @@ class LinearProbeArgs:
 
     n_iters: int = 1000
     log_every: int = 100
+    target: str = 'x0'  # 'x0' or 'x1'
 
-    opt: OptimizerArgs = OptimizerArgs()
+    opt: OptimizerArgs = field(default_factory=OptimizerArgs)
     zero_features: bool | None = False # use zero features (for getting baseline)
 
 class LinearProbe(nn.Module):
@@ -85,9 +87,14 @@ def main(lp_args: LinearProbeArgs):
         return features
 
     def get_target(batch):
-        x0 = batch['x0']
+        if lp_args.target == 'x0':
+            target = batch['x0']
+        elif lp_args.target == 'x1':
+            target = batch['x1']
+        else:
+            raise ValueError(f"Unknown target: {lp_args.target}")
         render_fn = jax.vmap(partial(substrate.render_state, params=args.data.gol_params, img_size=224))
-        img = render_fn(x0)
+        img = render_fn(target)
         z = jax.vmap(fm.embed_img)(img)
         return z
     
@@ -126,7 +133,7 @@ def main(lp_args: LinearProbeArgs):
 
     rng = jax.random.PRNGKey(lp_args.seed)
     X, Y = [], []
-    for i_iter in tqdm(range(100)):
+    for i_iter in tqdm(range(500)):
         rng, _rng = split(rng)
         batch = generate_batch_vmap(split(_rng, lp_args.opt.batch_size))
         X.append(get_features(params, batch))
@@ -138,19 +145,32 @@ def main(lp_args: LinearProbeArgs):
         X = jnp.zeros_like(X)
     X, Y = np.array(X), np.array(Y)
 
-    reg = LinearRegression(fit_intercept=True).fit(X, Y)
-    score = reg.score(X, Y)
-    Y_pred = reg.predict(X)
-    mse = ((Y-Y_pred)**2).mean()
+    # reg = LinearRegression(fit_intercept=True).fit(X, Y)
+    # score = reg.score(X, Y)
+    # Y_pred = reg.predict(X)
+    # mse = ((Y-Y_pred)**2).mean()
+    # Y_pred_norm = Y_pred / (jnp.linalg.norm(Y_pred, axis=-1, keepdims=True) + 1e-8)
+    # cossim = (Y*Y_pred_norm).sum(axis=-1).mean()
+    # print(score, mse, cossim)
 
-    Y_pred_norm = Y_pred / (jnp.linalg.norm(Y_pred, axis=-1, keepdims=True) + 1e-8)
-    cossim = (Y*Y_pred_norm).sum(axis=-1).mean()
-    print(score, mse, cossim)
+    # split into train & validation sets
+    X_train, X_val, Y_train, Y_val = train_test_split(X, Y, test_size=0.2, random_state=lp_args.seed)
+
+    # fit on training set
+    reg = LinearRegression(fit_intercept=True).fit(X_train, Y_train)
+    # evaluate on validation set
+    val_score = reg.score(X_val, Y_val)
+    Y_val_pred = reg.predict(X_val)
+    val_mse = ((Y_val - Y_val_pred) ** 2).mean()
+    # cosine similarity on validation
+    Y_val_pred_norm = Y_val_pred / (jnp.linalg.norm(Y_val_pred, axis=-1, keepdims=True) + 1e-8)
+    val_cossim = (Y_val * Y_val_pred_norm).sum(axis=-1).mean()
+    print(f"Validation R²: {val_score:.4f}, MSE: {val_mse:.4e}, CosSim: {val_cossim:.4f}")
 
     if lp_args.save_dir:
         os.makedirs(lp_args.save_dir, exist_ok=True)
         util.save_pkl(lp_args.save_dir, "reg", reg)
-        util.save_pkl(lp_args.save_dir, "metrics", dict(score=score, mse=mse, cossim=cossim))
+        util.save_pkl(lp_args.save_dir, "metrics", dict(score=val_score, mse=val_mse, cossim=val_cossim))
 
 
 if __name__ == "__main__":
