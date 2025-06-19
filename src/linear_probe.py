@@ -12,6 +12,8 @@ from jax.random import split
 import optax
 from flax.training.train_state import TrainState
 import flax.linen as nn
+from sklearn.linear_model import LinearRegression
+from sklearn.model_selection import train_test_split
 
 from substrates.gol import GameOfLife
 from rollout import rollout_simulation
@@ -29,116 +31,77 @@ class LinearProbeArgs:
     save_dir: str | None = None
 
     n_iters: int = 1000
-    log_every: int = 100
+    ablate_features: str = "none" # "none" or "random" or "zeros"
 
-    opt: OptimizerArgs = OptimizerArgs()
-    zero_features: bool | None = False # use zero features (for getting baseline)
-
-class LinearProbe(nn.Module):
-    d_in: int
-    d_out: int
-
-    @nn.compact
-    def __call__(self, x):
-        x = nn.Dense(self.d_out, use_bias=True, kernel_init=nn.initializers.normal(0.01))(x)
-        return x
+    target: str = "x0" # CLIP target, either "x0" or "x1"
 
 def main(lp_args: LinearProbeArgs):
+    print(lp_args)
     args = util.load_pkl(lp_args.load_dir, "args")
-    params = util.load_pkl(lp_args.load_dir, "params")
+    main = Main(args)
     fm = create_foundation_model('clip')
 
-    # ----- COPIED FROM MAIN.PY -----
-    if isinstance(args.data.dt, int):
-        args.data.dt = [args.data.dt]
-    print(lp_args)
-    dts = jnp.array(args.data.dt)
-    dt_max = dts.max().item()
 
-    net = create_net(args)
-    substrate = GameOfLife(grid_size=args.data.grid_size)
-    rollout_fn = partial(rollout_simulation, s0=None, substrate=substrate, fm=None, rollout_steps=args.data.t_end+dt_max,
-                         time_sampling='video', img_size=None, return_state=True)
-    
-    def generate_batch(rng):
-        rng, _rng = split(rng)
-        state = rollout_fn(_rng, args.data.gol_params)['state']
-
-        rng, _rng = split(rng)
-        t0 = jax.random.randint(_rng, shape=(), minval=args.data.t_start, maxval=args.data.t_end)
-
-        rng, _rng = split(rng)
-        dt_id = jax.random.randint(_rng, shape=(), minval=0, maxval=len(dts))
-        dt = dts[dt_id]
-        t1 = t0 + dt
-        x0, x1 = state[t0], state[t1]
-        return dict(x0=x0, x1=x1, dt_id=dt_id, dt=dt, state=state, t0=t0, t1=t1)
-    # ------------------------------
-
+    @jax.jit
     def get_features(params, batch):
         x0, x1, dt_id = batch['x0'], batch['x1'], batch['dt_id']
-        forward_fn = jax.vmap(partial(net.apply, return_hidden_reprs=True), in_axes=(None, 0, 0))
+        forward_fn = jax.vmap(partial(main.net.apply, return_hidden_reprs=True), in_axes=(None, 0, 0))
         y, hidden_reprs = forward_fn(params, x0, dt_id)
         features = jax.tree.map(lambda x: x.mean(axis=(-3, -2)), hidden_reprs)
         features = jnp.concatenate(features, axis=-1)
         return features
 
+    @jax.jit
     def get_target(batch):
-        x0 = batch['x0']
-        render_fn = jax.vmap(partial(substrate.render_state, params=args.data.gol_params, img_size=224))
-        img = render_fn(x0)
+        x = batch[lp_args.target.lower()] # x0 or x1
+        render_fn = jax.vmap(partial(main.substrate.render_state, params=args.data.gol_params, img_size=224))
+        img = render_fn(x)
         z = jax.vmap(fm.embed_img)(img)
         return z
     
-    linear_probe = LinearProbe(d_in=args.model.channels*args.model.layers, d_out=512)
-        
-    def loss_fn(lp_params, batch):
-        features = get_features(params, batch)
-        if lp_args.zero_features:
-            features = jnp.zeros_like(features)
-        y = get_target(batch)
-        y_pred = jax.vmap(linear_probe.apply, in_axes=(None, 0))(lp_params, features)
-        loss_mse = (y - y_pred)**2
-        loss = loss_mse.mean()
-        metrics = dict(loss=loss, loss_mse=loss_mse)
-        # y_pred = y_pred / (jnp.linalg.norm(y_pred, axis=-1, keepdims=True) + 1e-8)
-        # loss_cosine = -(y*y_pred).sum(axis=-1)
-        # loss = loss_cosine.mean()
-        # metrics = dict(loss=loss, loss_cosine=loss_cosine)
-        return loss, metrics
-
-    @jax.jit
-    def iter_train(train_state, batch):
-        (_, metrics), grads = jax.value_and_grad(loss_fn, has_aux=True)(train_state.params, batch)
-        train_state = train_state.apply_gradients(grads=grads)
-        return train_state, metrics
-
     rng = jax.random.PRNGKey(lp_args.seed)
+    if lp_args.ablate_features.lower() == "random":
+        instance = main.generate_instance(rng)
+        params = main.net.init(rng, instance['x0'], instance['dt_id'])
+    else:
+        params = util.load_pkl(lp_args.load_dir, "params")
 
-    generate_batch_vmap = jax.jit(jax.vmap(generate_batch))
-
-    features = get_features(params, generate_batch_vmap(split(rng, 1)))[0]
-    lp_params = linear_probe.init(rng, features)
-
-    tx = optax.chain(optax.clip_by_global_norm(lp_args.opt.clip_grad_norm), optax.adamw(lp_args.opt.learning_rate, weight_decay=lp_args.opt.weight_decay, eps=1e-8))
-    train_state = TrainState.create(apply_fn=linear_probe.apply, params=lp_params, tx=tx)
-
-    loss_history = []
+    X, Y = [], []
     pbar = tqdm(range(lp_args.n_iters))
-    for i_iter in pbar:
+    for _ in pbar:
         rng, _rng = split(rng)
-        batch = generate_batch_vmap(split(_rng, lp_args.opt.batch_size))
-        train_state, metrics = iter_train(train_state, batch)
+        batch = main.generate_batch(_rng)
+        X.append(get_features(params, batch))
+        Y.append(get_target(batch))
+    X = jnp.concatenate(X, axis=0)
+    Y = jnp.concatenate(Y, axis=0)
 
-        loss_history.append(metrics['loss'].item())
-        if lp_args.save_dir is not None and (i_iter % lp_args.log_every == 0 or i_iter == lp_args.n_iters - 1):
-            os.makedirs(lp_args.save_dir, exist_ok=True)
-            util.save_pkl(lp_args.save_dir, "lp_params", jax.tree.map(lambda x: np.array(x), train_state.params))
-            util.save_pkl(lp_args.save_dir, "lp_args", lp_args)
-            util.save_pkl(lp_args.save_dir, "loss_history", loss_history)
-        pbar.set_postfix(loss=loss_history[-1])
+    if lp_args.ablate_features.lower() == "zeros":
+        X = jnp.zeros_like(X)
 
+    X, Y = np.array(X), np.array(Y)
+    X_train, X_test, Y_train, Y_test = train_test_split(X, Y, test_size=0.2, random_state=lp_args.seed)
+    print(f"Training: {X_train.shape} -> {Y_train.shape}")
+    print(f"Testing: {X_test.shape} -> {Y_test.shape}")
+    reg = LinearRegression(fit_intercept=True).fit(X_train, Y_train)
+    score_train = reg.score(X_train, Y_train)
+    score_test = reg.score(X_test, Y_test)
+    Y_train_pred = reg.predict(X_train)
+    Y_test_pred = reg.predict(X_test)
+    mse_train = ((Y_train-Y_train_pred)**2).mean()
+    mse_test = ((Y_test-Y_test_pred)**2).mean()
+    Y_train_pred_norm = Y_train_pred / (jnp.linalg.norm(Y_train_pred, axis=-1, keepdims=True) + 1e-8)
+    Y_test_pred_norm = Y_test_pred / (jnp.linalg.norm(Y_test_pred, axis=-1, keepdims=True) + 1e-8)
+    cossim_train = (Y_train*Y_train_pred_norm).sum(axis=-1).mean()
+    cossim_test = (Y_test*Y_test_pred_norm).sum(axis=-1).mean()
+    metrics = dict(score_train=score_train, score_test=score_test, mse_train=mse_train, mse_test=mse_test,
+                   cossim_train=cossim_train, cossim_test=cossim_test)
+    print(metrics)
 
+    if lp_args.save_dir:
+        os.makedirs(lp_args.save_dir, exist_ok=True)
+        util.save_pkl(lp_args.save_dir, "reg", reg)
+        util.save_pkl(lp_args.save_dir, "metrics", metrics)
 
 if __name__ == "__main__":
     main(tyro.cli(LinearProbeArgs))
