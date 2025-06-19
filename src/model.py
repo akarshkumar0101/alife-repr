@@ -49,3 +49,20 @@ class ConvNet(nn.Module):
             hidden_reprs.append(x)
         x = nn.Conv(self.out_channels, 1, 1, 0, kernel_init=nn.initializers.normal(0.01))(x)
         return (x, hidden_reprs) if return_hidden_reprs else x
+    
+    @nn.compact
+    def forward_soft(self, x, dt_id: int = 0, return_hidden_reprs: bool = False):
+        """
+        x: (H, W, 2)
+        dt_id: int describing the which dt to use, 0 is the first dt, 1 is the second dt, etc.
+        """
+        hidden_reprs = []
+        x = nn.Conv(self.channels, 1, 1, 0)(x) # (H, W, D)
+        dt_id = nn.Embed(self.n_dts, self.channels)(dt_id) # (D, )
+        x = x + dt_id # (H, W, D)
+        for _ in range(self.layers):
+            x = Block(self.channels)(x)
+            hidden_reprs.append(x)
+        x = nn.Conv(self.out_channels, 1, 1, 0, kernel_init=nn.initializers.normal(0.01))(x)
+        return (x, hidden_reprs) if return_hidden_reprs else x
+
