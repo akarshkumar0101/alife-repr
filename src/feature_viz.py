@@ -36,67 +36,71 @@ def main(fv_args: FeatureVizArgs):
     print(fv_args)
     args = util.load_pkl(fv_args.load_dir, "args")
     main = Main(args)
+    net_params = util.load_pkl(args.save_dir, "params")
 
-    @jax.jit
-    def get_features(params, batch):
-        x0, x1, dt_id = batch['x0'], batch['x1'], batch['dt_id']
-        forward_fn = jax.vmap(partial(main.net.apply, return_hidden_reprs=True), in_axes=(None, 0, 0))
-        y, hidden_reprs = forward_fn(params, x0, dt_id)
+    def init_params(rng, grid_size=64):
+        params = {}
+        gs = 1
+        while gs < grid_size:
+            rng, _rng = split(rng)
+            params[f'res_{gs:03d}'] = jax.random.normal(_rng, (gs, gs, 2))
+            gs = gs * 2
+        gs = grid_size
+        rng, _rng = split(rng)
+        params[f'res_{gs:03d}'] = jax.random.normal(_rng, (gs, gs, 2))
+        return params
+
+    def get_x0(rng, params, do_augs=True):
+        gs = max([v.shape[0] for v in params.values()])
+        x0 = jnp.zeros((gs, gs, 2))
+        for k, v in params.items():
+            x0 = x0 + jax.image.resize(v, (gs, gs, 2), method='bilinear')
+        x0 = x0 + jax.random.normal(rng, x0.shape)*.1
+
+        if do_augs:
+            rng, _rng = split(rng)
+            scale = jax.random.uniform(rng, (2,), minval=0.8, maxval=1.2)
+            rng, _rng = split(rng)
+            translate = jax.random.uniform(rng, (2,), minval=-gs//5, maxval=gs//5)
+            x0 = jax.image.scale_and_translate(x0, (gs, gs, 2), (0, 1), scale, translate, method='bilinear')
+        x0 = jax.nn.softmax(x0, axis=-1)
+        return x0
+
+    def loss_fn(params, rng, i_neuron):
+        x0 = jax.vmap(get_x0, in_axes=(0, None))(split(rng, 4), params)
+        dt_id = jnp.array(0, dtype=int)
+        apply_fn = jax.vmap(partial(main.net.apply, dt_id=dt_id, return_hidden_reprs=True, method=main.net.forward_soft), in_axes=(None, 0))
+        logits, hidden_reprs = apply_fn(net_params, x0)
         features = jax.tree.map(lambda x: x.mean(axis=(-3, -2)), hidden_reprs)
         features = jnp.concatenate(features, axis=-1)
-        return features
+        return features[..., i_neuron].mean()
+
+    def do_iter(train_state, rng, i_neuron):
+        loss, grads = jax.value_and_grad(loss_fn)(train_state.params, rng, i_neuron)
+        train_state = train_state.apply_gradients(grads=grads)
+        return train_state, loss
 
     @jax.jit
-    def get_target(batch):
-        x = batch[lp_args.target.lower()] # x0 or x1
-        render_fn = jax.vmap(partial(main.substrate.render_state, params=args.data.gol_params, img_size=224))
-        img = render_fn(x)
-        z = jax.vmap(fm.embed_img)(img)
-        return z
+    def get_feature_viz(rng, i_neuron):
+        params = init_params(rng)
+
+        tx = optax.chain(optax.clip_by_global_norm(1.), optax.adamw(1e-2, weight_decay=0., eps=1e-8))
+        train_state = TrainState.create(apply_fn=main.net.apply, params=params, tx=tx)
+
+        do_iter_fn = jax.jit(partial(do_iter, i_neuron=i_neuron))
+        train_state, loss_history = jax.lax.scan(do_iter_fn, train_state, split(rng, fv_args.n_iters))
+        return train_state.params, loss_history
     
-    rng = jax.random.PRNGKey(lp_args.seed)
-    if lp_args.ablate_features.lower() == "random":
-        instance = main.generate_instance(rng)
-        params = main.net.init(rng, instance['x0'], instance['dt_id'])
-    else:
-        params = util.load_pkl(lp_args.load_dir, "params")
+    rng = jax.random.PRNGKey(fv_args.seed)
+    params, loss_history = jax.lax.map(partial(get_feature_viz, rng), jnp.arange(0, 512, 4), batch_size=8)
 
-    X, Y = [], []
-    pbar = tqdm(range(lp_args.n_iters))
-    for _ in pbar:
-        rng, _rng = split(rng)
-        batch = main.generate_batch(_rng)
-        X.append(get_features(params, batch))
-        Y.append(get_target(batch))
-    X = jnp.concatenate(X, axis=0)
-    Y = jnp.concatenate(Y, axis=0)
-
-    if lp_args.ablate_features.lower() == "zeros":
-        X = jnp.zeros_like(X)
-
-    X, Y = np.array(X), np.array(Y)
-    X_train, X_test, Y_train, Y_test = train_test_split(X, Y, test_size=0.2, random_state=lp_args.seed)
-    print(f"Training: {X_train.shape} -> {Y_train.shape}")
-    print(f"Testing: {X_test.shape} -> {Y_test.shape}")
-    reg = LinearRegression(fit_intercept=True).fit(X_train, Y_train)
-    score_train = reg.score(X_train, Y_train)
-    score_test = reg.score(X_test, Y_test)
-    Y_train_pred = reg.predict(X_train)
-    Y_test_pred = reg.predict(X_test)
-    mse_train = ((Y_train-Y_train_pred)**2).mean()
-    mse_test = ((Y_test-Y_test_pred)**2).mean()
-    Y_train_pred_norm = Y_train_pred / (jnp.linalg.norm(Y_train_pred, axis=-1, keepdims=True) + 1e-8)
-    Y_test_pred_norm = Y_test_pred / (jnp.linalg.norm(Y_test_pred, axis=-1, keepdims=True) + 1e-8)
-    cossim_train = (Y_train*Y_train_pred_norm).sum(axis=-1).mean()
-    cossim_test = (Y_test*Y_test_pred_norm).sum(axis=-1).mean()
-    metrics = dict(score_train=score_train, score_test=score_test, mse_train=mse_train, mse_test=mse_test,
-                   cossim_train=cossim_train, cossim_test=cossim_test)
-    print(metrics)
-
-    if lp_args.save_dir:
-        os.makedirs(lp_args.save_dir, exist_ok=True)
-        util.save_pkl(lp_args.save_dir, "reg", reg)
-        util.save_pkl(lp_args.save_dir, "metrics", metrics)
+    x0 = jax.vmap(partial(get_x0, do_augs=False), in_axes=(None, 0))(rng, params)
+    print(x0.shape)
+    if fv_args.save_dir:
+        os.makedirs(fv_args.save_dir, exist_ok=True)
+        util.save_pkl(fv_args.save_dir, "params", params)
+        util.save_pkl(fv_args.save_dir, "loss_history", loss_history)
+        util.save_pkl(fv_args.save_dir, "x0", x0)
 
 if __name__ == "__main__":
-    main(tyro.cli(LinearProbeArgs))
+    main(tyro.cli(FeatureVizArgs))
