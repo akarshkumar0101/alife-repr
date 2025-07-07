@@ -54,16 +54,18 @@ class CausalSelfAttention(nn.Module):
         B, T, C = x.shape # batch size, sequence length, embedding dimensionality (n_embd)
 
         # calculate query, key, values for all heads in batch and move head forward to be the batch dim
-        q, k ,v  = self.c_attn(x).split(3, axis=-1)
+        # q, k ,v  = self.c_attn(x).split(3, axis=-1)
+        q, k, v = jnp.split(self.c_attn(x), 3, axis=-1)
         q = q.reshape(B, T, self.n_head, C // self.n_head).swapaxes(1, 2) # (B, nh, T, hs)
         k = k.reshape(B, T, self.n_head, C // self.n_head).swapaxes(1, 2) # (B, nh, T, hs)
         v = v.reshape(B, T, self.n_head, C // self.n_head).swapaxes(1, 2) # (B, nh, T, hs)
 
-        mask = jnp.tril(jnp.ones((T, T))).reshape((1, 1, T, T))
+        # mask = jnp.tril(jnp.ones((T, T))).reshape((1, 1, T, T))
+        # mask = jnp.ones_like(mask)
         
         # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
         att = (q @ k.swapaxes(-2, -1)) * (1.0 / jnp.sqrt(k.shape[-1]))
-        att = jnp.where(mask == 0, float('-inf'), att)
+        # att = jnp.where(mask == 0, float('-inf'), att)
         att = nn.softmax(att, axis=-1)
         att = self.attn_dropout(att, deterministic=not train)
         y = att @ v # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
