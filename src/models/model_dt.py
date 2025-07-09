@@ -108,7 +108,6 @@ class DTNetwork(nn.Module):
             self.pos_embed = nn.Embed(cfg.nt*cfg.nh*cfg.nw, cfg.n_embd)
         else:
             raise ValueError(f"Invalid block type: {self.cfg.block}")
-        cfg = self.cfg
         self.patch_embed = nn.Dense(cfg.n_embd)
         self.head = nn.Dense(cfg.pt*cfg.ph*cfg.pw)
 
@@ -116,17 +115,17 @@ class DTNetwork(nn.Module):
         """
         x: (H, W)
         """
-        x = rearrange(x, "H W -> 1 H W")
         cfg = self.cfg
         x_in = x
         x = x.astype(float)
         # convert to flattened patches
+        x = rearrange(x, "H W -> 1 H W")
         x = rearrange(x, "(nt pt) (nh ph) (nw pw) -> (nt nh nw) (pt ph pw)",
                       nt=cfg.nt, nh=cfg.nh, nw=cfg.nw, pt=cfg.pt, ph=cfg.ph, pw=cfg.pw)
         # embed patches
         x = self.patch_embed(x)
         # add positional embeddings
-        if self.cfg.block == "transformer":
+        if self.cfg.block == "attn":
             x = x + self.pos_embed(jnp.arange(len(x)))
         # forward encoder
         features = []

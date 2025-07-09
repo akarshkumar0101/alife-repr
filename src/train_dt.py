@@ -89,7 +89,7 @@ class Main:
         (_, metrics), grads = jax.value_and_grad(self.loss_fn, has_aux=True)(train_state.params, batch)
         if train:
             train_state = train_state.apply_gradients(grads=grads)
-        return train_state, metrics
+        return train_state, {'grads': grads, **metrics}
     
     def init(self):
         rng = jax.random.PRNGKey(self.args.seed)
@@ -104,25 +104,32 @@ class Main:
 
         self.final_loss = np.inf
         self.loss_history = []
+
+        self.rng = jax.random.PRNGKey(self.args.seed)
+        self.i_iter = 0
+    
+    def step(self):
+        self.rng, _rng = split(self.rng)
+        self.train_state, metrics = self.do_iter_train(self.train_state, _rng)
+
+        self.loss_history.append(metrics['loss'].mean().item())
+        if self.args.save_dir is not None and (self.i_iter % self.args.log_every == 0 or self.i_iter == self.args.n_iters - 1):
+            os.makedirs(self.args.save_dir, exist_ok=True)
+            util.save_pkl(self.args.save_dir, "args", self.args)
+            util.save_pkl(self.args.save_dir, "loss_history", self.loss_history)
+            _, metrics = jax.lax.scan(self.do_iter_eval, self.train_state, split(_rng, 100))
+            final_loss_now = metrics['loss'].mean().item()
+            if final_loss_now < self.final_loss:
+                self.final_loss = final_loss_now
+                util.save_pkl(self.args.save_dir, "final_loss", self.final_loss)
+                util.save_pkl(self.args.save_dir, "params", jax.tree.map(lambda x: np.array(x), self.train_state.params))
+        
+        self.i_iter += 1
     
     def run(self):
-        rng = jax.random.PRNGKey(self.args.seed)
         pbar = tqdm(range(self.args.n_iters))
-        for i_iter in pbar:
-            rng, _rng = split(rng)
-            self.train_state, metrics = self.do_iter_train(self.train_state, _rng)
-
-            self.loss_history.append(metrics['loss'].mean().item())
-            if self.args.save_dir is not None and (i_iter % self.args.log_every == 0 or i_iter == self.args.n_iters - 1):
-                os.makedirs(self.args.save_dir, exist_ok=True)
-                util.save_pkl(self.args.save_dir, "args", self.args)
-                util.save_pkl(self.args.save_dir, "loss_history", self.loss_history)
-                _, metrics = jax.lax.scan(self.do_iter_eval, self.train_state, split(rng, 100))
-                final_loss_now = metrics['loss'].mean().item()
-                if final_loss_now < self.final_loss:
-                    self.final_loss = final_loss_now
-                    util.save_pkl(self.args.save_dir, "final_loss", self.final_loss)
-                    util.save_pkl(self.args.save_dir, "params", jax.tree.map(lambda x: np.array(x), self.train_state.params))
+        for _ in pbar:
+            self.step()
             pbar.set_postfix(loss=self.loss_history[-1], ppl=np.exp(self.loss_history[-1]))
 
 
