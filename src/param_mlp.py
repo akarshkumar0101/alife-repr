@@ -17,6 +17,8 @@ from rollout import rollout_simulation
 from foundation_models import create_foundation_model
 import util
 
+import numpy as np
+
 
 @dataclass
 class OptimizerArgs:
@@ -62,6 +64,11 @@ class ParamMLP(nn.Module):
 
 
 def main(args: ParamMLPArgs):
+    # Use only open-ended rules
+    params_np = np.load("low_oe_params.npy")
+    params_jnp = jnp.array(params_np, dtype=jnp.int32)
+    n_saved = params_jnp.shape[0]
+
     dts = jnp.array([args.data.dt] if isinstance(args.data.dt, int) else args.data.dt)
     dt_max = int(dts.max())
 
@@ -81,7 +88,9 @@ def main(args: ParamMLPArgs):
     # Generate a single training sample
     def gen_one(rng):
         rng, sub = split(rng)
-        pid = jax.random.randint(sub, (), 0, args.data.gol_params_max, dtype=jnp.int32)
+        # pid = jax.random.randint(sub, (), 0, args.data.gol_params_max, dtype=jnp.int32)
+        idx = jax.random.randint(sub, (), 0, n_saved, dtype=jnp.int32)  # Only use open-ended params
+        pid = params_jnp[idx]
         rng, sub = split(rng)
         state = rollout_fn(sub, pid)['state']
         rng, sub = split(rng)
