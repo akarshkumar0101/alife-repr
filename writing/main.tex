@@ -77,27 +77,45 @@
 
 
 % keywords can be removed
-\keywords{Artificial life \and Representation learning \and Emergence \and Simulations}
+\keywords{Artificial life \and Emergence \and Simulations \and Representation learning}
 
 
 \section{Introduction}
 
-In science, a wide variety of problems require running simulations for obtaining the final results. 
-For example, in physics, the \textit{no fast-forwarding theorem} states that a quantum system can't be simulated faster than its evolution according to time. 
-However, if we only care about some macroscopic final properties, can we fast-forward or even skip simulation to abstract the spacetime to distill the macroscopic rules? 
-Then, if we have the macroscopic rules, can we in turn use them to predict the microscopic rules? 
-As an analogy, in our real world, physics could seen as the microscopic rules that govern the behavior of particles, while biology could be seen as the macroscopic rules that operate at the level of organisms. 
-The question becomes: can we learn biology from physics, and vice versa? 
+The evolution of a world, conditioned on its initial state, can be described by rules at different scales, from microscopic to macroscopic rules. 
+Take our world as an example. 
+At the microscopic scale, physics describes fundamental forces and particles. 
+Then, zooming out, chemistry describes molecular structures and chemical bonds. 
+At an even more macroscopic scale, biology describes cells, tissues, and organisms. 
+Biological systems exhibit emergent structures that arise from the interactions of particles, but such emergence is hard to predict from the movements of particles due to its entirely new behavior, as Anderson stated in his ``More is Different'' paper \cite{anderson_more_1972}.  
+Thus, there are two problems that are interesting to explore:
+\begin{enumerate}
+  \item Can we distill emergent structures of a given world?
+  \item Given the ``physics'' rules of a world, can we predict its ``biology'' rules, and vice versa?
+\end{enumerate}
+
+Emergent structures are hard to foresee as they are not obvious from the microscopic level, so we might only recognize them once they arise. 
+This is perhaps related to the idea of computational irreducibility, which states that the only way to know the future state of a complex system is to simulate it step by step, without any shortcut available. 
+However, if we only care about some coarse-grained properties, then we might be able to foresee the future state and thus distill the emergent structures.
+
+Such distillation of emergent structures constitutes what we call the ``biology'' rules of a world, which are the macroscopic rules that govern the emergent structures. 
+Given the microscopic ``physics'' rules and the macroscopic ``biology'' rules, can we determine one from the other? 
+% In science, a wide variety of problems require running simulations for obtaining the final results. 
+% For example, in physics, the \textit{no fast-forwarding theorem} states that a quantum system can't be simulated faster than its evolution according to time. 
+% However, if we only care about some macroscopic final properties, can we fast-forward or even skip simulation to abstract the spacetime to distill the macroscopic rules? 
+% Then, if we have the macroscopic rules, can we in turn use them to predict the microscopic rules? 
+% As an analogy, in our real world, physics could seen as the microscopic rules that govern the behavior of particles, while biology could be seen as the macroscopic rules that operate at the level of organisms. 
+% The question becomes: can we learn biology from physics, and vice versa? 
 % This is similar to humans' System 1 thinking — e.g., when we drive cars, we humans don't run step-by-step simulations in our brains before we make decisions on next moves, 
 % but rather, we run high-level simulations in the abstraction level, which allows us to predict from step $t$ to $t+\Delta t$, where $\Delta t$ might be large. Such macroscopic simulations correspond to "intuitive" physics, 
 % which is imprecise but retains key information we want — this is in contrast to "real" physics that we employ in e.g. physical experiments.
 
-This motivates the hypothesis that a good abstraction correlates with the capability to predicting macroscopic properties ahead of time. 
-Specifically, a good abstraction might enable such capability, and/or predicting macroscopic properties ahead of time gives rise to a good abstraction. 
-Once we have a good abstraction, that might encode enough information for us to learn the microscopic rules as well.
+% This motivates the hypothesis that a good abstraction correlates with the capability to predicting macroscopic properties ahead of time. 
+% Specifically, a good abstraction might enable such capability, and/or predicting macroscopic properties ahead of time gives rise to a good abstraction. 
+% Once we have a good abstraction, that might encode enough information for us to learn the microscopic rules as well.
 
-As a testbed, we picked an artificial life (ALife) substrate, Game of Life. The problem is: Can AI models trained on Game of Life's physics rules (step-by-step simulation) learn its biology (the emergent structures), and vice versa? 
-Game of Life rules are easy to learn as they just involve convolution, but to predict the emergent structures is a much harder task, as the system is very chaotic and a tiny difference in initial state can result in very different states in several steps. 
+As a testbed, we picked an artificial life (ALife) substrate, Game of Life. 
+Game of Life ``physics'' rules are easy to learn as they just involve convolution, but to predict the emergent structures (its ``biology'' rules) is a non-trivial task, as the system is very chaotic and a tiny difference in initial state can result in very different states in a few steps. 
 % We show that models asked to predict more steps ahead contain better, i.e., more linearly separable, representation spaces.
 
 
@@ -115,31 +133,23 @@ Take the emergent behavior of an ant colony as an example. The behavior of an in
 If we instead consider the ant colony as a whole, ants prefer to follow stronger pheromone trails, and such behavior can be described with a pushdown automaton that would be much shorter, as it just needs to encode the pheromone map. 
 Some work from causal emergence claims that when causal workings are maximized, time reversal symmetry, or reversibility, is maximized, which might be linked to the idea that the system can then be described with a shorter program.
 
-\subsection{Hypernetworks}
 
+\section{Results}
 
-\section{Methodology}
-
-\subsection{Distill Game of Life ``Biology'' Rules}
-Game of Life (GoL) has clear deterministic rules, and in particular, Conway's GoL is Turing-complete. 
+\subsection{Distill Emergent Structures from Observations}
+We hypothesize that the capability to distill a world's emergent structures might correlate with its capability to predict a future state many steps ahead, as emergent structures often operate at a more coarse-grained level than the microscopic particles. 
+Hence, to distill the emergent structures of Game of Life (GoL), we adopted the task of predicting a GoL state many steps ahead. 
+GoL has clear deterministic rules, and in particular, Conway's GoL is Turing-complete. 
 Predicting the immediate next state ($t \rightarrow t+1$) is an easy task, but predicting multiple steps ahead ($t \rightarrow t+\Delta t$, where $\Delta t>1$) is a much harder task. 
-Thus, we expect that a model has to make more mistakes and compress information more efficiently as $\Delta t$ increases. To test on a variety of simulations not limited to Conway's GoL, we also used other GoL rules found by the ASAL framework by \cite{kumar_automating_2024}.
+Thus, we expect that a model has to compress information more efficiently at a higher level as $\Delta t$ increases. To test on a variety of simulations not limited to Conway's GoL, we also used other GoL rules found by the ASAL framework by \cite{kumar_automating_2024}.
 \paragraph{Model}
-We train ConvNet that maps from GoL state $t$ to state $t+\Delta t$ in one forward pass. Specifically, the ConvNet takes a 2D GoL grid as input, encodes it, and uses a $1 \times 1$ convolution to put it into a $D$-dimensional feature map. 
+We trained ConvNet that maps from GoL state $t$ to state $t+\Delta t$ in one forward pass. Specifically, the ConvNet takes a 2D GoL grid as input, encodes it, and uses a $1 \times 1$ convolution to put it into a $D$-dimensional feature map. 
 It adds a learned embedding for $\Delta t$, the number of timesteps skipped ahead, to each spatial location. Then, it applies a series of residual blocks. Finally, a $1 \times 1$ convolution projects back to the output channels.
 \paragraph{Representation Space Evaluation}
 To measure whether the ConvNet's representations capture the emergent structures in GoL, we use a linear probe from the representations of input GoL frame to CLIP vector encoding the frame. 
 CLIP encoding could be seen as the average of lots of humans' representations, given its training data, so quantifying how well the representations linearly map to CLIP vectors is more objective than evaluation metrics such as how well the representations encode the number of gliders.
 
-\subsection{Predict ``Biology'' from ``Physics''}
-
-\subsection{Predict ``Physics'' from ``Biology''}
-
-
-\section{Results}
-
-\subsection{Distill Game of Life ``Biology'' Rules}
-Preliminary results show that models asked to skip more timesteps ahead (higher $\Delta t$) have better representations of input states (states $t$), which is reflected as linear probe having higher $R^{2}$ to CLIP vector (as shown in the middle panel of Figure ~\ref{fig:7291_result}). 
+\paragraph{Results} Preliminary results show that models asked to skip more timesteps ahead (higher $\Delta t$) have better representations of input states (states $t$), which is reflected as linear probe having higher $R^{2}$ to CLIP vector (as shown in the middle panel of Figure ~\ref{fig:7291_result}). 
 The representations of target states (states $t+\Delta t$) don't necessarily improve as $\Delta t$ increases (as shown in the right panel of Figure ~\ref{fig:7291_result}). But when compared against the baseline of linear probing a random-weights model, the representations of target states do surpass the baseline's as dt increases.
 
 \begin{figure}[h]
@@ -156,13 +166,39 @@ As an analogy, the model captures the "organisms" in GoL, without caring too muc
 \begin{figure}[h]
   \centering
   \includegraphics[width=\linewidth]{figures/7291_vis.png}
-  \caption{Model performance on Game of Life 7291, with $\Delta t$ = 16. First row: Input state. Second row: Ground-truth target state. Third row: Model prediction of target state. Fourth row: Cross-entropy loss.}
+  \caption{ConvNet performance on Game of Life 7291, with $\Delta t$ = 16. First row: Input state. Second row: Ground-truth target state. Third row: Model prediction of target state. Fourth row: Cross-entropy loss.}
   \label{fig:7291_vis}
 \end{figure}
 
-\subsection{Predict ``Biology'' from ``Physics''}
 
-\subsection{Predict ``Physics'' from ``Biology''}
+\subsection{Distill Emergent Structures from ``Physics'' Rules}
+In the task above, we distilled emergent structures from observations of GoL trajectories. An interesting follow-up question is whether we can distill emergent structures directly from the ``physics'' rules of GoL, without ever needing to observe any trajectories. 
+CLIP vectors encoding GoL states could be seen as the emergent structures of GoL, as there has been work showing that CLIP vectors capture high-level information but not low-level details [need to find the paper to cite]. 
+For instance, CLIP vectors can capture e.g. that there will be trees in this part of the image, but not the exact number of leaves on each tree. 
+The concrete task then is, given a vector encoding a GoL world's ``physics'' rules, can we predict the CLIP vector encoding the emergent structures of that world?
+
+\paragraph{``Physics'' Rules} One world maps to one set of ``physics'' rules. The different worlds toggle on / off different rules, such as ``a dead cell with 9 alive cells around it becomes alive''. 
+There are in total $2^{18}$ possible worlds. 
+In implementation, a set of ``physics'' rules is a vector whose entries specify whether a cell will be alive or dead, given its current state and its neighbors' states.
+
+\paragraph{Model} We trained an MLP that takes a vector encoding the ``physics'' rules of a GoL world as input, and outputs a CLIP vector encoding a state from that GoL world.
+
+\paragraph{Results} Preliminary results show that it is possible to predict the emergent structures o a world just from its ``physics'' rules, without every needing to observe any trajectories. 
+Previously, ASAL \cite{kumar_automating_2024} sorted the $2^{18}$ possible worlds by their open-endedness score, which basically ranks the worlds by how emergent they are. 
+We trained the MLP on the most emergent worlds. As shown in Figure ~\ref{fig:rule_to_clip_vector}, as the model is trained on more worlds, the model gets higher $R^{2}$ on predicting the CLIP vectors for the different worlds.
+
+\begin{figure}[h]
+  \centering
+  \includegraphics[width=0.7\linewidth]{figures/rule_to_clip_vector.png}
+  \caption{MLP's $R^{2}$ score on predicting CLIP vectors for different GoL worlds, given the worlds' ``physics'' rules. 
+           As the model is trained on more worlds, the model becomes better at predicting the CLIP vectors, i.e., distilling the emergent structures of the worlds.}
+  \label{fig:rule_to_clip_vector}
+\end{figure}
+
+
+\subsection{Predict ``Biology'' Rules from ``Physics'' Rules}
+
+\subsection{Predict ``Physics'' Rules from ``Biology'' Rules}
 
 
 \section{Discussion}
