@@ -111,6 +111,10 @@ class Main:
     def step(self):
         self.rng, _rng = split(self.rng)
         self.train_state, metrics = self.do_iter_train(self.train_state, _rng)
+        grads = metrics['grads']
+        grads = jnp.concatenate([g.flatten() for g in jax.tree.leaves(grads)])
+        print(grads.shape)
+        print(jnp.abs(grads).mean())
 
         self.loss_history.append(metrics['loss'].mean().item())
         if self.args.save_dir is not None and (self.i_iter % self.args.log_every == 0 or self.i_iter == self.args.n_iters - 1):

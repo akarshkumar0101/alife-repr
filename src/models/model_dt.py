@@ -47,9 +47,12 @@ class ConvBlock(nn.Module):
         """
         x = rearrange(x, "(N M) D -> N M D", N=int(np.sqrt(len(x))))
 
-        a = self.ln_1(x)
-        a = jnp.pad(a, pad_width=[(1, 1), (1, 1), (0, 0)], mode='wrap')
-        x = x + self.conv(a)
+        def do_conv(a):
+            a = jnp.pad(a, pad_width=[(1, 1), (1, 1), (0, 0)], mode='wrap')
+            a = self.conv(a)
+            return a
+
+        x = x + do_conv(self.ln_1(x))
         x = x + self.mlp(self.ln_2(x), train=True)
         x = rearrange(x, "N M D -> (N M) D")
         return x
@@ -108,7 +111,7 @@ class DTNetwork(nn.Module):
             self.pos_embed = nn.Embed(cfg.nt*cfg.nh*cfg.nw, cfg.n_embd)
         else:
             raise ValueError(f"Invalid block type: {self.cfg.block}")
-        self.patch_embed = nn.Dense(cfg.n_embd)
+        self.patch_embed = nn.Dense(cfg.n_embd, bias_init=nn.initializers.normal(0.01)) # this bias init is extremely important for stability
         self.head = nn.Dense(cfg.pt*cfg.ph*cfg.pw)
 
     def __call__(self, x, y):
