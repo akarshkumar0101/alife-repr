@@ -1,3 +1,4 @@
+import time
 import os
 from functools import partial
 from dataclasses import dataclass
@@ -73,15 +74,15 @@ class Main:
         dt_id = jax.random.randint(_rng, shape=(), minval=0, maxval=len(self.dts))
         dt = self.dts[dt_id]
         t1 = t0 + dt
-        x0, x1 = state[t0], state[t1]
-        return dict(x0=x0, x1=x1, dt_id=dt_id, dt=dt, state=state, t0=t0, t1=t1)
+        x, y = state[t0], state[t1]
+        return dict(x=x, y=y, dt_id=dt_id, dt=dt, state=state, tx=t0, ty=t1)
 
     def generate_batch(self, rng):
         return jax.vmap(self.generate_instance)(split(rng, self.args.opt.batch_size))
 
     def loss_fn(self, params, batch):
-        x0, x1 = batch['x0'], batch['x1']
-        loss, metrics = jax.vmap(self.net.apply, in_axes=(None, 0, 0))(params, x0, x1)
+        x, y = batch['x'], batch['y']
+        loss, metrics = jax.vmap(self.net.apply, in_axes=(None, 0, 0))(params, x, y)
         return loss.mean(), metrics
 
     def do_iter(self, train_state, rng, train=True):
@@ -89,12 +90,14 @@ class Main:
         (_, metrics), grads = jax.value_and_grad(self.loss_fn, has_aux=True)(train_state.params, batch)
         if train:
             train_state = train_state.apply_gradients(grads=grads)
-        return train_state, {'grads': grads, **metrics}
+        # return train_state, {'grads': grads, **metrics}
+        return train_state, {'loss': metrics['loss']}
     
     def init(self):
         rng = jax.random.PRNGKey(self.args.seed)
         instance = self.generate_instance(rng)
-        self.init_params = self.net.init(rng, instance['x0'], instance['x1'])
+        print(self.net.tabulate(rng, instance['x'], instance['y']))
+        self.init_params = self.net.init(rng, instance['x'], instance['y'])
         n_params = sum(x.size for x in jax.tree.leaves(self.init_params))
         print(f"Number of parameters: {n_params:,}")
 
@@ -103,24 +106,29 @@ class Main:
         self.train_state = TrainState.create(apply_fn=self.net.apply, params=self.init_params, tx=tx)
 
         self.final_loss = np.inf
-        self.loss_history = []
+        self.loss_history, self.grad_norm_history = [], []
 
         self.rng = jax.random.PRNGKey(self.args.seed)
         self.i_iter = 0
+        self.start_time = time.time()
     
     def step(self):
         self.rng, _rng = split(self.rng)
         self.train_state, metrics = self.do_iter_train(self.train_state, _rng)
-        grads = metrics['grads']
-        grads = jnp.concatenate([g.flatten() for g in jax.tree.leaves(grads)])
-        print(grads.shape)
-        print(jnp.abs(grads).mean())
+        # grads = metrics['grads']
+        # grads = jnp.concatenate([g.flatten() for g in jax.tree.leaves(grads)])
+        # grad_norm = jnp.linalg.norm(grads)
 
         self.loss_history.append(metrics['loss'].mean().item())
+        # self.grad_norm_history.append(grad_norm.item())
         if self.args.save_dir is not None and (self.i_iter % self.args.log_every == 0 or self.i_iter == self.args.n_iters - 1):
             os.makedirs(self.args.save_dir, exist_ok=True)
             util.save_pkl(self.args.save_dir, "args", self.args)
             util.save_pkl(self.args.save_dir, "loss_history", self.loss_history)
+            util.save_pkl(self.args.save_dir, "grad_norm_history", self.grad_norm_history)
+            iter_per_sec = self.i_iter / (time.time() - self.start_time)
+            util.save_pkl(self.args.save_dir, "iter_per_sec", iter_per_sec)
+
             _, metrics = jax.lax.scan(self.do_iter_eval, self.train_state, split(_rng, 100))
             final_loss_now = metrics['loss'].mean().item()
             if final_loss_now < self.final_loss:

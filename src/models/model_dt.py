@@ -29,6 +29,7 @@ class TransformerBlock(nn.Module):
         x = x + self.mlp(self.ln_2(x), train=True)
         x = rearrange(x, "1 ... -> ...")
         return x
+TransformerBlock = nn.remat(TransformerBlock)
 
 class ConvBlock(nn.Module):
     n_embd: int
@@ -56,6 +57,7 @@ class ConvBlock(nn.Module):
         x = x + self.mlp(self.ln_2(x), train=True)
         x = rearrange(x, "N M D -> (N M) D")
         return x
+ConvBlock = nn.remat(ConvBlock)
 
 class ConvBlockOld(nn.Module):
     n_embd: int

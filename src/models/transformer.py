@@ -50,7 +50,7 @@ class CausalSelfAttention(nn.Module):
         self.n_head = config.n_head
         self.n_embd = config.n_embd
 
-    def __call__(self, x: jax.Array, *, train: bool) -> jax.Array:
+    def __call__(self, x: jax.Array, *, train: bool = True) -> jax.Array:
         B, T, C = x.shape # batch size, sequence length, embedding dimensionality (n_embd)
 
         # calculate query, key, values for all heads in batch and move head forward to be the batch dim
@@ -83,7 +83,7 @@ class MLP(nn.Module):
         self.c_proj  = nn.Dense(config.n_embd)
         self.dropout = nn.Dropout(config.dropout)
 
-    def __call__(self, x: jax.Array, *, train: bool) -> jax.Array:
+    def __call__(self, x: jax.Array, *, train: bool = True) -> jax.Array:
         x = self.c_fc(x)
         x = nn.gelu(x, approximate=True)
         x = self.c_proj(x)
