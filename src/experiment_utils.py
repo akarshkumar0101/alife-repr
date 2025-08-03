@@ -49,7 +49,7 @@ def _create_arg_list(cfg):
 
     arg_list = []
     for key, val in cfg.items():
-        if isinstance(val, list):
+        if isinstance(val, list) or isinstance(val, tuple):
             arg_list.append(f'--{key} {" ".join([format_value(v) for v in val])}')
         else:
             arg_list.append(f"--{key}={format_value(val)}")

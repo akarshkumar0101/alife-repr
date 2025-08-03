@@ -17,19 +17,14 @@ from einops import rearrange
 
 from substrates.gol import GameOfLife
 from rollout import rollout_simulation
-
+from models.mae import MAE, MAEConfig
 import util
-
-@dataclass
-class ModelArgs:
-    d_hidden: int = 1024
-    layers: int = 8
 
 @dataclass
 class DataArgs:
     gol_params: int = 6152
-    grid_size: int = 64
-    dt: int = 32
+    grid_size: int = 32
+    dt: int = 4
     t_start: int = 32
     t_end: int = 64
 
@@ -53,18 +48,9 @@ class Args:
     n_iters: int = 10000
     log_every: int = 1000
 
-    model: ModelArgs = ModelArgs()
+    model: MAEConfig = MAEConfig()
     data: DataArgs = DataArgs()
     opt: OptimizerArgs = OptimizerArgs()
-
-class Model(nn.Module):
-    @nn.compact
-    def __call__(self, inputs):
-        x, y = inputs['x'], inputs['y']
-        y_pred = nn.Dense(features=len(y))(x)
-        loss = ((y_pred - y)**2).mean()
-        outputs = dict(loss=loss, y_pred=y_pred, x=x, y=y)
-        return outputs
 
 class DataGenerator:
     def __init__(self, args: DataArgs):
@@ -75,31 +61,34 @@ class DataGenerator:
     
     def generate_instance(self, rng):
         rng, _rng = split(rng)
-        state = self.rollout_fn(_rng, self.args.data.gol_params)['state']
+        state = self.rollout_fn(_rng, self.args.gol_params)['state']
         rng, _rng = split(rng)
-        t0 = jax.random.randint(_rng, shape=(), minval=self.args.data.t_start, maxval=self.args.data.t_end)
-        t1 = t0 + self.args.data.dt
-        state = jax.lax.dynamic_slice(state, (t0, 0, 0), (self.args.data.dt, self.args.data.grid_size, self.args.data.grid_size))
+        t0 = jax.random.randint(_rng, shape=(), minval=self.args.t_start, maxval=self.args.t_end)
+        t1 = t0 + self.args.dt
+        state = jax.lax.dynamic_slice(state, (t0, 0, 0), (self.args.dt, self.args.grid_size, self.args.grid_size))
         return dict(rng=rng, state=state, t0=t0, t1=t1)
 
-    def generate_batch(self, rng):
-        return jax.vmap(self.generate_instance)(split(rng, self.args.opt.batch_size))
+    def generate_batch(self, rng, batch_size):
+        return jax.vmap(self.generate_instance)(split(rng, batch_size))
 
 class Main:
     def __init__(self, args: Args):
         self.args = copy.deepcopy(args)
 
-        self.model = Model(self.args.model)
+        self.model = MAE(self.args.model)
         self.data_gen = DataGenerator(self.args.data)
-        self.do_iter_train = jax.jit(self.do_iter_train)
-        self.do_iter_eval = jax.jit(self.do_iter_eval)
+        # self.do_iter_train = jax.jit(self.do_iter_train)
+        # self.do_iter_eval = jax.jit(self.do_iter_eval)
+        self.do_iter_train = jax.jit(self.do_iter_train, donate_argnums=(0,))
+        self.do_iter_eval = jax.jit(self.do_iter_eval, donate_argnums=(0,))
+        self.data_gen.generate_batch = partial(self.data_gen.generate_batch, batch_size=self.args.opt.batch_size)
 
     def loss_fn(self, params, batch):
-        inputs = dict(x=batch['state'], y=batch['state'])
-        outputs = jax.vmap(self.model.apply, in_axes=(None, 0, 0))(params, inputs)
+        rng, state = batch['rng'], batch['state']
+        outputs = jax.vmap(self.model.apply, in_axes=(None, 0, 0))(params, rng, state)
         return outputs['loss'].mean(), outputs
     
-    def do_iter(self, train_state, rng, train=True):
+    def do_iter_train(self, train_state, rng):
         batch = self.data_gen.generate_batch(rng)
         batch = jax.tree.map(lambda x: rearrange(x, "(N B) ... -> N B ...", N=self.args.opt.grad_accum_steps), batch)
         def micro_step(grads, batch):
@@ -111,9 +100,8 @@ class Main:
         grads = jax.tree.map(lambda x: x / self.args.opt.grad_accum_steps, grads)
         outputs = jax.tree.map(lambda x: rearrange(x, "N B ... -> (N B) ..."), outputs)
         grad_norm = jnp.linalg.norm(jnp.concatenate([g.flatten() for g in jax.tree.leaves(grads)]))
-        if train:
-            train_state = train_state.apply_gradients(grads=grads)
-        return train_state, dict(loss=outputs['loss'].mean(), grad_norm=grad_norm if train else None)
+        train_state = train_state.apply_gradients(grads=grads)
+        return train_state, dict(loss=outputs['loss'].mean(), grad_norm=grad_norm)
     
     def do_iter_eval(self, train_state, rng):
         batch = self.data_gen.generate_batch(rng)
@@ -126,7 +114,6 @@ class Main:
         return train_state, dict(loss=outputs['loss'].mean(), grad_norm=None)
 
     def init(self):
-        # self.clip = CLIP()
         rng = jax.random.PRNGKey(self.args.seed)
         instance = self.data_gen.generate_instance(rng)
         print(self.model.tabulate(rng, rng, instance['state']))
