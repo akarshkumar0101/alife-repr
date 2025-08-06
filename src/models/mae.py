@@ -127,6 +127,34 @@ class MAE(nn.Module):
         outputs = dict(x_in=x_in, idx_keep=idx_keep, idx_mask=idx_mask, input_mask=input_mask,
                        features=features, x_enc=x_enc, logits=logits, loss_ce=loss_ce, loss=loss)
         return outputs
+
+    def embed_tensor(self, x: jax.Array) -> jax.Array:
+        """
+        x.shape: (T, H, W)
+        """
+        cfg = self.cfg
+        (T, H, W), (pt, ph, pw) = cfg.tensor_shape, cfg.patch_shape
+        nt, nh, nw = T//pt, H//ph, W//pw
+        x_in = x
+        x = x.astype(float)
+        # convert to flattened patches
+        x = rearrange(x, "(nt pt) (nh ph) (nw pw) -> (nt nh nw) (pt ph pw)",
+                      nt=nt, nh=nh, nw=nw, pt=pt, ph=ph, pw=pw)
+        # embed patches
+        x = self.patch_embed(x)
+        # add positional embeddings
+        x = x + self.pos_embed_enc(jnp.arange(self.n_patches))
+        # forward encoder
+        features = []
+        for block in self.blocks_enc:
+            x = rearrange(x, "... -> 1 ...")
+            x = block(x, train=False)
+            x = rearrange(x, "1 ... -> ...")
+            features.append(x)
+        features = jnp.stack(features)
+        x_enc = x
+        outputs = dict(x_in=x_in, features=features, x_enc=x_enc)
+        return outputs
     
 def main():
     from tqdm.auto import tqdm
